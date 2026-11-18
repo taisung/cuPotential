@@ -2,6 +2,8 @@
 
 Date: 2026-11-17
 
+Updated: 2026-11-18, with facts from the NVIDIA documentation site ([0010](0010_nvidia_documentation_review.md)). Corrected the statement on exception pairs.
+
 Source version: 0.3.5, runtime ABI 32
 
 Reviewed upstream commit: `fbfc4cb6282cd52d33f7adbbcbaeaa5c19b47d74`
@@ -22,6 +24,8 @@ Another MD engine can consume the interaction APIs directly. It must adapt the s
 | Custom radial pair interactions | Expression compilation or a device evaluator supplied as LTO IR, with no implicit reciprocal calculation | Supply an evaluator that is pure, repeatable, and symmetric under particle exchange, including for excluded pairs ([`pair.h`](../include/cupo/pair.h#L62)), and any matching long range treatment. |
 | Other force terms | The tuple API exposes the kinds listed above | Retain the engine's implementations for additional functional forms. |
 
+The [NonbondedForce guide](https://docs.nvidia.com/cuda/cupotential/nonbonded-force#supported-features) lists the custom features that the plugin does not support: `NoCutoff`, `CutoffNonPeriodic`, interaction groups, tabulated functions, computed values, and energy parameter derivatives. It documents `select(mask, softcore, ordinary)`, which evaluates only the active branch in one traversal. An expression can also declare lattice-direct terms. The runtime then subtracts the selected long-range contribution, and the application supplies the matching reciprocal calculation, the self and background corrections, and the exception interactions ([C API reference](https://docs.nvidia.com/cuda/cupotential/c-api/reference#custom-pair-expressions)).
+
 The bonded kinds and energy definitions are explicit in [`tuples.h`](../include/cupo/tuples.h#L19). Periodic torsion refers to the cosine dependence on the dihedral angle; periodic boundary treatment is controlled separately by each tuple's `use_pbc` field.
 
 The tuples API is experimental. [`tuples.h`](../include/cupo/tuples.h#L19) opens with "Experimental interaction-tuple handle", and the [plugin README](../plugins/openmm/README.md#L20) says to expect breaking changes in the C API. Bonded support is also a runtime capability. Check that `cupo_runtime_capabilities()` reports bit `0x4` ([`version.h`](../include/cupo/version.h#L30)) before you delegate bonded terms.
@@ -35,7 +39,7 @@ The OpenMM adapter uses this backend under specific conditions. [`GroupedBonded.
 - The precision is single or mixed.
 - There is only one context.
 
-The adapter also [sends bonded forces that request periodic boundary treatment](../plugins/openmm/cpp/platforms/cuda/src/bonded/GroupedBonded.cu#L290) to stock OpenMM. That fallback is a plugin policy. The public tuples contract includes periodic box inputs, and the plugin itself uses tuple periodic boundaries for nonbonded exception pairs ([`CudaNonbondedKernels.cu`](../plugins/openmm/cpp/platforms/cuda/src/nonbonded/CudaNonbondedKernels.cu#L1027)).
+The adapter also [sends bonded forces that request periodic boundary treatment](../plugins/openmm/cpp/platforms/cuda/src/bonded/GroupedBonded.cu#L290) to stock OpenMM. That fallback is a plugin policy. NVIDIA's [overview page](https://docs.nvidia.com/cuda/cupotential#how-cupotential-works) states the same scope: the plugin accelerates "nonperiodic harmonic bonds, harmonic angles, and periodic torsions". The public tuples contract includes periodic box inputs. For nonbonded exception pairs, the plugin passes the periodic flag of the source force as `use_pbc` ([`CudaNonbondedKernels.cu`](../plugins/openmm/cpp/platforms/cuda/src/nonbonded/CudaNonbondedKernels.cu#L1027)). Since release 0.3.4, that flag defaults to nonperiodic distances, as in OpenMM ([changelog](https://docs.nvidia.com/cuda/cupotential/changelog/openmm)). Reciprocal exclusion corrections always use periodic wrapping ([NonbondedForce guide](https://docs.nvidia.com/cuda/cupotential/nonbonded-force#standard-source-restrictions)).
 
 ## Runtime concurrency support
 
@@ -73,7 +77,7 @@ Bonded work has its own placement in this schedule. [`CUPO_PLUGIN_BONDED_SCHEDUL
 
 The [grouped bonded hook](../plugins/openmm/cpp/platforms/cuda/src/bonded/GroupedBonded.cu#L272) runs before the deferred nonbonded join. Bonded evaluation overlaps the nonbonded work only on steps that replay a captured graph. Graphs are on by default, and the nonbonded capture starts after 50 warm-up evaluations ([line 1526](../plugins/openmm/cpp/platforms/cuda/src/nonbonded/CudaNonbondedKernels.cu#L1526)). On eager steps, the nonbonded work runs on OpenMM's stream ([line 1476](../plugins/openmm/cpp/platforms/cuda/src/nonbonded/CudaNonbondedKernels.cu#L1476)) and joins before the bonded work starts.
 
-The plugin also supplies the Langevin integrator. [`CudaLangevinMiddleKernel.cu`](../plugins/openmm/cpp/platforms/cuda/src/integrator/CudaLangevinMiddleKernel.cu#L41) holds its launchers. The kernel bodies for the integration parts, center-of-mass removal, SETTLE, and SHAKE are in [`Constraints.cuh`](../plugins/openmm/cpp/platforms/cuda/src/integrator/Constraints.cuh). The integrator implements only SETTLE and SHAKE, and it [rejects constraints that need CCMA](../plugins/openmm/cpp/platforms/cuda/src/integrator/CudaLangevinMiddleKernel.cu#L802). The same file holds the [whole step graph eligibility](../plugins/openmm/cpp/platforms/cuda/src/integrator/CudaLangevinMiddleKernel.cu#L845) and its [execution](../plugins/openmm/cpp/platforms/cuda/src/integrator/CudaLangevinMiddleKernel.cu#L1159). Its Monte Carlo barostat is another [plugin component](../plugins/openmm/cpp/platforms/cuda/src/barostat/CudaBarostatKernel.cu). These implementations are present in the repository source, while the public core API exposes interaction primitives rather than a general standalone simulation loop.
+The plugin also supplies the Langevin integrator. [`CudaLangevinMiddleKernel.cu`](../plugins/openmm/cpp/platforms/cuda/src/integrator/CudaLangevinMiddleKernel.cu#L41) holds its launchers. The kernel bodies for the integration parts, center-of-mass removal, SETTLE, and SHAKE are in [`Constraints.cuh`](../plugins/openmm/cpp/platforms/cuda/src/integrator/Constraints.cuh). The integrator implements only SETTLE and SHAKE, and it [rejects constraints that need CCMA](../plugins/openmm/cpp/platforms/cuda/src/integrator/CudaLangevinMiddleKernel.cu#L802). The same file holds the [whole step graph eligibility](../plugins/openmm/cpp/platforms/cuda/src/integrator/CudaLangevinMiddleKernel.cu#L845) and its [execution](../plugins/openmm/cpp/platforms/cuda/src/integrator/CudaLangevinMiddleKernel.cu#L1159). Its Monte Carlo barostat is another [plugin component](../plugins/openmm/cpp/platforms/cuda/src/barostat/CudaBarostatKernel.cu). Since release 0.3.5, other Python threads can run while `LangevinMiddleIntegrator.step()` advances the simulation ([changelog](https://docs.nvidia.com/cuda/cupotential/changelog/openmm)). These implementations are present in the repository source, while the public core API exposes interaction primitives rather than a general standalone simulation loop.
 
 ## Implications for another MD engine
 

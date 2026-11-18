@@ -2,6 +2,8 @@
 
 Date: 2026-11-17
 
+Updated: 2026-11-18, with facts from the NVIDIA documentation site ([0010](0010_nvidia_documentation_review.md))
+
 Source version: 0.3.5, runtime ABI 32
 
 Reviewed upstream commit: `fbfc4cb6282cd52d33f7adbbcbaeaa5c19b47d74`
@@ -99,13 +101,15 @@ The nonbonded adapter passes only the FP32 position array to cuPotential, as sho
 
 `fltflt` represents a value using two FP32 components, high and low. It increases effective significand precision while retaining FP32 dynamic range; it is not the IEEE FP64 format. See [`fltflt.hpp`](../plugins/openmm/cpp/platforms/cuda/src/integrator/fltflt.hpp#L43). Mixed velocity buffers remain `double4` even when integration arithmetic uses `fltflt`. The displacement scratch can use the high/low representation directly, but velocities retain OpenMM compatible storage; see [`Constraints.cuh`](../plugins/openmm/cpp/platforms/cuda/src/integrator/Constraints.cuh#L123).
 
-Automatic selection uses native double when the device performance ratio and a runtime probe support that choice, otherwise `fltflt`. `CUPO_PLUGIN_MIXED_COMPUTE=double`, `fltflt`, or `auto` controls the selection. Native double and `fltflt` results are explicitly documented in the source as differing in their bits. The plugin [rejects full double nonbonded mode](../plugins/openmm/cpp/platforms/cuda/src/nonbonded/CudaNonbondedKernels.cu#L929); its Langevin integrator also accepts only single or mixed mode.
+Automatic selection uses native double when the device performance ratio and a runtime probe support that choice, otherwise `fltflt`. `CUPO_PLUGIN_MIXED_COMPUTE=double`, `fltflt`, or `auto` controls the selection. The [0.3.5 changelog](https://docs.nvidia.com/cuda/cupotential/changelog/openmm) documents the same selection: native double on GPUs with fast FP64 and float-float on the others. Native double and `fltflt` results are explicitly documented in the source as differing in their bits. The plugin [rejects full double nonbonded mode](../plugins/openmm/cpp/platforms/cuda/src/nonbonded/CudaNonbondedKernels.cu#L929); its Langevin integrator also accepts only single or mixed mode.
 
 ## Documented arithmetic and grid encodings
 
-The custom pair callback exposes FP32 distance geometry and FP32 energy and derivative results in [`pair_device.cuh`](../include/cupo/pair_device.cuh#L17). Its [compilation contract](../include/cupo/pair_device.cuh#L38) specifies a runtime policy with flush-to-zero and approximate division and square root, and requires external IR to match that policy through `--use_fast_math`. The same contract requires bitwise repeatability of requested results for identical inputs; the compiler flag alone does not establish that property. Expression inputs and prepared values are also explicitly [FP32](../include/cupo/expression.h#L51).
+The custom pair callback exposes FP32 distance geometry and FP32 energy and derivative results in [`pair_device.cuh`](../include/cupo/pair_device.cuh#L17). Its [compilation contract](../include/cupo/pair_device.cuh#L38) specifies a runtime policy with flush-to-zero and approximate division and square root, and requires external IR to match that policy through `--use_fast_math`. The same contract requires bitwise repeatability of requested results for identical inputs; the compiler flag alone does not establish that property. Expression inputs and prepared values are also explicitly [FP32](../include/cupo/expression.h#L51). The [NonbondedForce guide](https://docs.nvidia.com/cuda/cupotential/nonbonded-force#supported-features) states the same policy for plugin users: "Custom parameters and arithmetic use FP32 even in a mixed-precision Context. CUDA fast math includes approximate division and square root and flushes subnormal values to zero; results need not match stock OpenMM bit for bit."
 
 The standalone convolution API documents [FP32 FFT arithmetic and intermediates](../include/cupo/convolution.h#L35). Its real-grid encodings can be FP32, FP16, int16, or int32. For integer encodings, [conversion](../include/cupo/convolution.h#L53) rounds to nearest with ties to even after applying the configured binary scale, uses FP32 arithmetic, saturates integer outputs to their range, and encodes NaN as zero. These are grid conversion rules, not documented overflow rules for the fixed64 particle force buffer. They are also separate from the int32 SPME charge grid named in the nonbonded determinism test.
+
+The [spreading page](https://docs.nvidia.com/cuda/cupotential/theory/spreading#what-deconvolution-cannot-undo) documents the deconvolution of each window: "The Ewald B-spline path uses squared stencil DFT amplitudes with a treatment for near-zero values; the C2-order-3 (C2O3) path uses stencil power averaged over fractional particle positions within a grid cell." The published accuracy study used "Host C++ real space in FP32, FP32 mesh/FFT storage, and FP64 reference stencil evaluation" ([error analysis page](https://docs.nvidia.com/cuda/cupotential/theory/error-analysis#study-conditions-and-reference-resolution)). Its curves therefore do not describe the arithmetic of the GPU runtime path exactly.
 
 ## What deterministic reduction requires
 

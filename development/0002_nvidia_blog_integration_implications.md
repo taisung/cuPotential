@@ -2,6 +2,8 @@
 
 Date: 2026-11-17
 
+Updated: 2026-11-18, with facts from the NVIDIA documentation site ([0010](0010_nvidia_documentation_review.md))
+
 Source: NVIDIA Technical Blog, [Accelerate Molecular Dynamics Simulations with Accurate, Flexible Primitives Using NVIDIA cuPotential](https://developer.nvidia.com/blog/accelerate-molecular-dynamics-simulations-with-accurate-flexible-primitives-using-nvidia-cupotential/), published 2026-11-16.
 
 Repository baseline: cuPotential 0.3.5, commit `fbfc4cb6282cd52d33f7adbbcbaeaa5c19b47d74`.
@@ -22,7 +24,9 @@ NVIDIA reports these results for its examples and OpenMM configuration.
 | Dispersion | Thousands-fold energy-error improvement in the illustrated comparison; shorter cutoffs complicate NBFix and combining rules. |
 | Tutorial compatibility | CUDA 13.1; LJPME, triclinic geometry, and offsets described as unsupported. |
 
-The checkout's [README](../README.md) chart supplies versioned throughput evidence: OpenMM 8.4.0 with cuPotential against stock OpenMM, NPT in mixed precision, six systems of 24k to 409k atoms on seven GPUs. The largest speedup on each GPU is between 2.64x and 3.99x. It shares the post's limitation: force, integrator, and barostat change together.
+NVIDIA's [error analysis page](https://docs.nvidia.com/cuda/cupotential/theory/error-analysis) gives the exact conditions of the grid comparison. The reference is OpenMM 8.4.0 in CUDA double precision with a 192³ mesh, a 2.0 nm cutoff, and `alpha` = 4.0 nm^-1, checked with a 256³ mesh on the first frame. The Ewald and u-series parameters stay fixed during the sweep, and every curve uses cuPotential's C2O3 window, so the Ewald curves are not stock OpenMM PME. See [0010](0010_nvidia_documentation_review.md#63-mesh-convergence-study).
+
+The checkout's [README](../README.md) chart supplies versioned throughput evidence: OpenMM 8.4.0 with cuPotential against stock OpenMM, NPT in mixed precision, six systems of 24k to 409k atoms on seven GPUs. The largest speedup on each GPU is between 2.64x and 3.99x. It shares the post's limitation: force, integrator, and barostat change together. The [overview page](https://docs.nvidia.com/cuda/cupotential#benchmarks) of the NVIDIA documentation shows a second chart of the same six systems and seven GPUs, with maxima of 2.66x to 3.93x and no date, OpenMM version, or precision label. Single values differ between the two charts by up to about 0.2 ([0010](0010_nvidia_documentation_review.md#5-the-speedup-chart-on-the-overview-page)).
 
 ## How this changes the integration experiment
 
@@ -65,7 +69,7 @@ The compatibility row above should not replace the versioned code contracts. At 
 
 Runtime provenance also matters. [`plugins/openmm/run_build`](../plugins/openmm/run_build#L39) builds the numerical runtime only when a root runtime build script is available. This public checkout has no such script or core runtime source; its normal path downloads release binaries through [`fetch_cupo`](../fetch_cupo). A successful plugin build would not establish that the numerical runtime had been rebuilt from this fork.
 
-These descriptions conflict with the versioned source and tests. The post names no cuPotential release, tag, or commit. Its tutorial uses CUDA 13.1, while release 0.3.5 records 13.4.3 and its [installation requirements](https://docs.nvidia.com/cuda/cupotential/install) specify CUDA 13.4. The tutorial therefore probably describes an earlier release. There is no basis to infer that the post's timing results include every capability in this checkout. Record the runtime version, ABI, toolkit, enabled backend, and numerical settings alongside any reproduced result.
+These descriptions conflict with the versioned source and tests. The post names no cuPotential release, tag, or commit. Its tutorial uses CUDA 13.1, while release 0.3.5 records 13.4.3 and its [installation requirements](https://docs.nvidia.com/cuda/cupotential/install) specify CUDA 13.4. The tutorial therefore probably describes an earlier release. The [documentation site](https://docs.nvidia.com/cuda/cupotential) describes 0.3.5 and agrees with this checkout. Its [changelog](https://docs.nvidia.com/cuda/cupotential/changelog/openmm) adds LJPME, triclinic boxes, and parameter offsets in 0.3.4, so the tutorial probably describes 0.3.3 or earlier (inferred). There is no basis to infer that the post's timing results include every capability in this checkout. Record the runtime version, ABI, toolkit, enabled backend, and numerical settings alongside any reproduced result.
 
 ## Remaining production requirements
 

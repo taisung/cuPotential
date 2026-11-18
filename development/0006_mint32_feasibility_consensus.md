@@ -2,6 +2,8 @@
 
 Date: 2026-11-17
 
+Updated: 2026-11-18, with facts from the NVIDIA documentation site ([0010](0010_nvidia_documentation_review.md))
+
 Source version: 0.3.5, runtime ABI 32
 
 Reviewed upstream commit: `fbfc4cb6282cd52d33f7adbbcbaeaa5c19b47d74`
@@ -80,6 +82,8 @@ Documented in the headers, unless marked:
 
 No exported function injects displacements, replaces the sorted coordinate storage, or returns a pair list (checked against every `CUPO_API` declaration in `include/cupo/`). Casting an `int4` array to `float*` does not help: the runtime would read integer bit patterns as floats.
 
+NVIDIA's [C API reference](https://docs.nvidia.com/cuda/cupotential/c-api/reference#runtime-and-data-conventions) states the same contract: "FP32 device positions with a caller-specified stride of at least three floats per particle." The staged reciprocal calls `cupo_kspace_spread`, `cupo_kspace_convolve`, and `cupo_kspace_interpolate` take no position argument ([`kspace.h`](../include/cupo/kspace.h#L249)). Spreading reads the bound cell list, so the stages add no coordinate entry (inferred).
+
 The custom callback is not an extension point for MINT32 (inferred). Particle records are opaque bytes ([`cell_list.h`](../include/cupo/cell_list.h#L44)), so the callback could recompute `r` from integer coordinates in a record. The runtime would still apply its own FP32 direction, cutoff test, and mesh mapping.
 
 OpenMM plugin (documented). The nonbonded adapter passes the FP32 `posq` array with stride 4 ([`CudaNonbondedKernels.cu`](../plugins/openmm/cpp/platforms/cuda/src/nonbonded/CudaNonbondedKernels.cu#L1567)) and rejects double precision ([line 929](../plugins/openmm/cpp/platforms/cuda/src/nonbonded/CudaNonbondedKernels.cu#L929)). The bonded adapter creates FP32 tuples ([`GroupedBonded.cu`](../plugins/openmm/cpp/platforms/cuda/src/bonded/GroupedBonded.cu#L179)) and also reads `posq` ([line 252](../plugins/openmm/cpp/platforms/cuda/src/bonded/GroupedBonded.cu#L252)). Only the integrator uses the mixed-precision correction ([`CudaLangevinMiddleKernel.cu`](../plugins/openmm/cpp/platforms/cuda/src/integrator/CudaLangevinMiddleKernel.cu#L393)). Inferred: for its force inputs, the plugin is in the same class as the paper's SPFP baseline. See [0005](0005_numerical_representations_layouts_and_determinism.md#precision-and-storage-in-the-openmm-plugin).
@@ -119,7 +123,7 @@ NVIDIA, or a party with the runtime source, adds an integer coordinate mode (sec
 
 ### Route C: engine-owned kernels with cuPotential math and convolution
 
-Its parts are documented:
+NVIDIA designed the scalar functions "for integration of cuPotential's splitting, spreading, and interpolation math into kernels developers have already built" ([C API reference](https://docs.nvidia.com/cuda/cupotential/c-api/reference#scalar-functions)). Its parts are documented:
 
 - The scalar splitting functions in `cupo_math.cu.o` take a squared distance ([`math/splitting.h`](../include/cupo/math/splitting.h#L28)). An engine pair kernel can form integer displacements first. The gradients are with respect to `r^2` ([line 19](../include/cupo/math/splitting.h#L19)).
 - The spreading functions take a grid offset in [0, 1), in FP32 or FP64 ([`math/spreading.h`](../include/cupo/math/spreading.h#L21)). The engine controls how it derives that offset. The Apache-licensed sample does this on the host ([`usage.cu`](../samples/ltoir-usage/usage.cu#L416)).
@@ -169,6 +173,8 @@ Wrapping each fractional component does not select the shortest Cartesian image 
 
 Calculated for this note: component wrapping is still correct for every pair inside the cutoff when the cutoff is at most half the smallest perpendicular cell width. It also never moves a farther pair inside the cutoff. Random pairs in three reduced cells confirm this. The manuscript's truncated octahedron meets the condition (width 46.1 Å, cutoff 8 Å).
 
+The cell list rejects a box in which "an axis has fewer than 2R+1 cells" ([`cell_list.h`](../include/cupo/cell_list.h#L31)), and the plugin requires at least three cutoffs per orthorhombic box length ([NonbondedForce guide](https://docs.nvidia.com/cuda/cupotential/nonbonded-force#supported-settings-and-differences)). If the cells of a reduced triclinic box are also at least one cutoff wide in the perpendicular direction, every accepted box meets the condition above (inferred, not documented).
+
 Quantities evaluated beyond the cutoff need a full lattice-image procedure. Examples are the exclusion corrections ([`dspace.h`](../include/cupo/dspace.h#L73)) and tuples with `use_pbc` ([`tuples.h`](../include/cupo/tuples.h#L63)). In a cell-list kernel, each neighbor cell has an integer lattice translation that the runtime can add exactly (inferred). Start with orthorhombic, fixed-box NVE.
 
 ## 7. Numerical check of the conversion boundary
@@ -191,14 +197,19 @@ for shift in (0, 8):
 
 ## 8. Open questions
 
-1. **The error budget differs.** The paper's baselines cut the direct PME term at 8 Å. cuPotential's C2 Prolate short-range term and its first two derivatives vanish at the cutoff ([`math/splitting.h`](../include/cupo/math/splitting.h#L22)). [0003](0003_speedup_theory_and_mechanisms.md#22-prolate-splitting) reports an NVIDIA NVE test in which that configuration drifted about 478 times less than OpenMM's default PME, with different meshes. If coordinate noise dominates the remaining drift, integer input helps more than in AMBER. If the mesh or the FP32 pair arithmetic dominates, it helps little.
-2. **The units differ.** The paper uses `k_B T`/ns per degree of freedom. The NVIDIA figures in 0003 use `ns^-1`. This checkout does not define that normalization. Convert both before any comparison.
+1. **The error budget differs.** The paper's baselines cut the direct PME term at 8 Å. cuPotential's C2 Prolate short-range term and its first two derivatives vanish at the cutoff ([`math/splitting.h`](../include/cupo/math/splitting.h#L22)). [0003](0003_speedup_theory_and_mechanisms.md#22-prolate-splitting) reports an NVIDIA NVE test in which that configuration drifted about 478 times less than OpenMM's default PME, with different meshes. If coordinate noise dominates the remaining drift, integer input helps more than in AMBER. If the mesh or the FP32 pair arithmetic dominates, it helps little. NVIDIA's [error analysis page](https://docs.nvidia.com/cuda/cupotential/theory/error-analysis#nve-energy-drift) states the purpose of that test: "here we focus on the contribution from any residual jump at the cutoff of the short-range splitting term". It uses rigid water, so it has no bonded terms. The converged PME reference, with stock OpenMM in mixed precision from the same start, drifted `-4.536e-7 ns^-1`. Only the electrostatics differ among the three arms. Inferred from these numbers and from [0010](0010_nvidia_documentation_review.md#64-nve-drift-study):
+   - The 478x gain comes from the electrostatics method, mainly from the smooth cutoff. The static Coulomb force errors of the two 0.9 nm arms differ by only about 2x.
+   - In this test, the whole drift of the cuPotential arm, `1.4e-6 ns^-1`, limits what integer coordinates could remove. Signed contributions can cancel, so the limit is approximate. It is more than 100 times smaller than the SPFP-to-MINT32 change in the paper's water benchmark, `2.0e-4` (calculated, different protocols).
+   - A test of coordinate precision therefore needs bonded terms, larger boxes, coordinates far from the origin, or longer runs.
+   - The convergence study ran its real space in FP32 but evaluated the stencil in FP64, so its curves hold no FP32 mesh-offset error (inferred). The page lists roundoff as a possible cause of a plateau and does not separate it. It names "ensemble error" as the target of future parameter work.
+2. **The units are the same, but the protocols differ.** The paper uses `k_B T`/ns per degree of freedom. NVIDIA's [error analysis page](https://docs.nvidia.com/cuda/cupotential/theory/error-analysis) divides the energy by `N_DOF k_B T` at 300 K, so its `ns^-1` figures have the same unit. NVIDIA's test uses 2 fs, a 0.9 nm cutoff, switched Lennard-Jones, and OpenMM mixed precision. The paper uses 1 fs and a 0.8 nm cutoff in AMBER. Do not compare the two sets of numbers as if only the precision differed.
 3. **The production benefit is indirect.** Production runs use thermostats, and the manuscript calls drift a diagnostic. The value for a 4 fs NPT run lies in constraint quality and reproducibility.
 4. **Repeatability.** An FP32 calculation is already repeatable for identical inputs under the conditions in [0005](0005_numerical_representations_layouts_and_determinism.md#conditions-and-limits-of-determinism). MINT32 does not make force reductions, constraint solves, or FFTs bit-identical. Integer input adds two narrower properties (inferred). The result no longer depends on which periodic image the caller supplies. It also no longer depends on how a mixed-precision position is split into high and low parts ([`test_reorder.py`](../plugins/openmm/tests/test_reorder.py#L22)).
 
 ## 9. Recommended sequence
 
 1. **Measure the sensitivity with the existing plugin**. No runtime change is needed.
+   - Reproduce NVIDIA's NVE protocol first, as the control arm: velocity Verlet with RATTLE at a `1e-8` tolerance, 2 fs, Lennard-Jones switched from 0.8 to 0.9 nm with no tail correction, mixed precision, and a linear fit from 20 ps to 10 ns ([error analysis page](https://docs.nvidia.com/cuda/cupotential/theory/error-analysis#simulation-conditions)). Then change one factor at a time.
    - Run NVE at 1 fs in mixed precision with the plugin `NonbondedForce`, whose default is Prolate ([`test_plugin_vs_stock.py`](../plugins/openmm/tests/test_plugin_vs_stock.py#L1484)), and a stock `VerletIntegrator`, which the tests combine with it ([`test_compact_policy.py`](../plugins/openmm/tests/test_compact_policy.py#L52)). Use a tight constraint tolerance. Use no thermostat, barostat, or momentum removal.
    - Start with rigid water, which has no bonded terms, to isolate the nonbonded and PME inputs. Then run DHFR, where the FP32 tuples read the same shifted `posq`.
    - Translate the initial positions by `T = k * L` for `k` in {-0.5, 0, 1, 3, 7, 15}. The cell list accepts any periodic image, but the limit for "unwrappable" positions is not documented, so check the large shifts first. OpenMM does not reorder atoms when the plugin force is the only nonbonded force ([`CudaNonbondedKernels.cu`](../plugins/openmm/cpp/platforms/cuda/src/nonbonded/CudaNonbondedKernels.cu#L1099); [0003](0003_speedup_theory_and_mechanisms.md#35-cuda-graphs-and-host-synchronization)), so `posq` keeps the offset. Confirm this by reading the positions back.
